@@ -1,0 +1,148 @@
+name: Build Battery Guard
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.7"
+      - name: Write project files
+        run: |
+          mkdir -p battery_guard overlay_app/app/src/main/java/com/guard/overlay
+          cat > battery_guard/module.prop <<'GUARD_EOF'
+          id=battery_guard
+          name=Battery Guard
+          version=1.0
+          versionCode=1
+          author=you
+          description=Lock screen overlay at 1% battery until charging (calls still work)
+          GUARD_EOF
+          cat > battery_guard/customize.sh <<'GUARD_EOF'
+          SKIPUNZIP=0
+          if [ -f "$MODPATH/overlay.apk" ]; then
+            cp "$MODPATH/overlay.apk" /data/local/tmp/overlay.apk
+            pm install -r /data/local/tmp/overlay.apk
+            rm -f /data/local/tmp/overlay.apk
+            ui_print "- overlay app installed"
+          else
+            ui_print "! overlay.apk not found, put it in module root and reflash"
+          fi
+          GUARD_EOF
+          cat > battery_guard/service.sh <<'GUARD_EOF'
+          #!/system/bin/sh
+          until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
+          PKG=com.guard.overlay
+          B=/sys/class/power_supply/battery
+          appops set $PKG SYSTEM_ALERT_WINDOW allow
+          STATE=0; N=0
+
+          call_state() { dumpsys telephony.registry | grep -m1 mCallState | tr -dc '0-9' | cut -c1; }
+          send() { am broadcast -f 0x20 -a "$1" -p $PKG >/dev/null 2>&1; }
+
+          while true; do
+            CAP=$(cat $B/capacity); ST=$(cat $B/status); CALL=$(call_state)
+            if [ "$CAP" -le 1 ] && [ "$ST" != "Charging" ] && [ "$ST" != "Full" ] && { [ -z "$CALL" ] || [ "$CALL" = "0" ]; }; then
+              N=$((N+1))
+              if [ $STATE = 0 ] || [ $N -ge 5 ]; then send com.guard.SHOW; STATE=1; N=0; fi
+            else
+              if [ $STATE = 1 ]; then send com.guard.HIDE; STATE=0; N=0; fi
+            fi
+            sleep 1
+          done
+          GUARD_EOF
+          cat > overlay_app/settings.gradle.kts <<'GUARD_EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement { repositories { google(); mavenCentral() } }
+          rootProject.name = "overlay_app"
+          include(":app")
+          GUARD_EOF
+          cat > overlay_app/build.gradle.kts <<'GUARD_EOF'
+          plugins {
+            id("com.android.application") version "8.5.2" apply false
+            id("org.jetbrains.kotlin.android") version "1.9.24" apply false
+          }
+          GUARD_EOF
+          cat > overlay_app/app/build.gradle.kts <<'GUARD_EOF'
+          plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
+          android {
+            namespace = "com.guard.overlay"
+            compileSdk = 34
+            defaultConfig { applicationId = "com.guard.overlay"; minSdk = 26; targetSdk = 34; versionCode = 1; versionName = "1.0" }
+            kotlinOptions { jvmTarget = "17" }
+            compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
+          }
+          GUARD_EOF
+          cat > overlay_app/app/src/main/AndroidManifest.xml <<'GUARD_EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
+            <application android:label="Battery Guard">
+              <receiver android:name=".GuardReceiver" android:exported="true">
+                <intent-filter>
+                  <action android:name="com.guard.SHOW"/>
+                  <action android:name="com.guard.HIDE"/>
+                </intent-filter>
+              </receiver>
+            </application>
+          </manifest>
+          GUARD_EOF
+          cat > overlay_app/app/src/main/java/com/guard/overlay/GuardReceiver.kt <<'GUARD_EOF'
+          package com.guard.overlay
+
+          import android.content.*
+          import android.graphics.*
+          import android.view.*
+          import android.widget.TextView
+
+          class GuardReceiver : BroadcastReceiver() {
+            override fun onReceive(c: Context, i: Intent) {
+              val ctx = c.applicationContext
+              val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+              when (i.action) {
+                "com.guard.SHOW" -> if (view == null) {
+                  val tv = TextView(ctx).apply {
+                    text = "⚠️ البطارية 1%\nاشحن الجهاز"
+                    textSize = 28f
+                    setTextColor(Color.WHITE)
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(Color.parseColor("#F2000000"))
+                    setOnTouchListener { _, _ -> true }
+                  }
+                  val p = WindowManager.LayoutParams(
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.MATCH_PARENT,
+                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                      WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
+                      WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
+                    PixelFormat.TRANSLUCENT
+                  )
+                  try { wm.addView(tv, p); view = tv } catch (_: Exception) {}
+                }
+                "com.guard.HIDE" -> view?.let {
+                  try { wm.removeView(it) } catch (_: Exception) {}
+                  view = null
+                }
+              }
+            }
+            companion object { var view: View? = null }
+          }
+          GUARD_EOF
+      - name: Build APK
+        working-directory: overlay_app
+        run: gradle assembleDebug --no-daemon
+      - name: Assemble module
+        run: |
+          cp overlay_app/app/build/outputs/apk/debug/app-debug.apk battery_guard/overlay.apk
+          chmod +x battery_guard/*.sh
+          cd battery_guard && zip -r ../battery_guard_module.zip .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: battery_guard_module
+          path: battery_guard_module.zip
