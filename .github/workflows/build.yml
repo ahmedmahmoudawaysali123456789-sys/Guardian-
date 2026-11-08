@@ -1,4 +1,4 @@
-name: Build Battery Guard
+name: Build Helper Ball
 on:
   workflow_dispatch:
 jobs:
@@ -7,251 +7,824 @@ jobs:
     steps:
       - name: Write project files
         run: |
-          mkdir -p battery_guard overlay_app/app/src/main/java/com/guard/overlay
-          cat > battery_guard/module.prop <<'GUARD_EOF'
-          id=battery_guard
-          name=Battery Guard
+          mkdir -p helper_module helper_app/app/src/main/java/com/helper/ball
+          cat > helper_module/module.prop <<'HB_EOF'
+          id=helper_ball
+          name=Helper Ball
           version=1.0
           versionCode=1
           author=you
-          description=Lock screen overlay at 1% battery until charging (calls still work)
-          GUARD_EOF
-          cat > battery_guard/customize.sh <<'GUARD_EOF'
+          description=Floating helper ball with many root shortcuts (system, toggles, performance, apps)
+          HB_EOF
+          cat > helper_module/customize.sh <<'HB_EOF'
           SKIPUNZIP=0
-          if [ -f "$MODPATH/overlay.apk" ]; then
-            cp "$MODPATH/overlay.apk" /data/local/tmp/overlay.apk
-            pm install -r /data/local/tmp/overlay.apk
-            rm -f /data/local/tmp/overlay.apk
-            ui_print "- overlay app installed"
+          if [ -f "$MODPATH/helper.apk" ]; then
+            cp "$MODPATH/helper.apk" /data/local/tmp/helper.apk
+            pm install -r /data/local/tmp/helper.apk
+            rm -f /data/local/tmp/helper.apk
+            appops set com.helper.ball SYSTEM_ALERT_WINDOW allow
+            pm grant com.helper.ball android.permission.POST_NOTIFICATIONS 2>/dev/null
+            am start-foreground-service -n com.helper.ball/.HelperService >/dev/null 2>&1
+            ui_print "- Helper Ball installed"
           else
-            ui_print "! overlay.apk not found, put it in module root and reflash"
+            ui_print "! helper.apk not found"
           fi
-          GUARD_EOF
-          cat > battery_guard/service.sh <<'GUARD_EOF'
+          HB_EOF
+          cat > helper_module/service.sh <<'HB_EOF'
           #!/system/bin/sh
           until [ "$(getprop sys.boot_completed)" = "1" ]; do sleep 2; done
-          PKG=com.guard.overlay
-          B=/sys/class/power_supply/battery
+          sleep 5
+          PKG=com.helper.ball
           appops set $PKG SYSTEM_ALERT_WINDOW allow
-          STATE=0; N=0
-
-          call_state() { dumpsys telephony.registry | grep -m1 mCallState | tr -dc '0-9' | cut -c1; }
-          send() { am broadcast -f 0x20 -a "$1" -p $PKG >/dev/null 2>&1; }
-
+          pm grant $PKG android.permission.POST_NOTIFICATIONS 2>/dev/null
+          dumpsys deviceidle whitelist +$PKG >/dev/null 2>&1
           while true; do
-            CAP=$(cat $B/capacity); ST=$(cat $B/status); CALL=$(call_state)
-            if [ "$CAP" -le 1 ] && [ "$ST" != "Charging" ] && [ "$ST" != "Full" ] && { [ -z "$CALL" ] || [ "$CALL" = "0" ]; }; then
-              N=$((N+1))
-              if [ $STATE = 0 ] || [ $N -ge 5 ]; then send com.guard.SHOW; STATE=1; N=0; fi
-            else
-              if [ $STATE = 1 ]; then send com.guard.HIDE; STATE=0; N=0; fi
+            if [ -z "$(pidof $PKG)" ]; then
+              am start-foreground-service -n $PKG/.HelperService >/dev/null 2>&1 || am startservice -n $PKG/.HelperService >/dev/null 2>&1
             fi
-            sleep 1
+            sleep 20
           done
-          GUARD_EOF
-          cat > overlay_app/settings.gradle.kts <<'GUARD_EOF'
+          HB_EOF
+          cat > helper_app/settings.gradle.kts <<'HB_EOF'
           pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
           dependencyResolutionManagement { repositories { google(); mavenCentral() } }
-          rootProject.name = "overlay_app"
+          rootProject.name = "helper_app"
           include(":app")
-          GUARD_EOF
-          cat > overlay_app/build.gradle.kts <<'GUARD_EOF'
+          HB_EOF
+          cat > helper_app/build.gradle.kts <<'HB_EOF'
           plugins {
             id("com.android.application") version "8.5.2" apply false
             id("org.jetbrains.kotlin.android") version "1.9.24" apply false
           }
-          GUARD_EOF
-          cat > overlay_app/app/build.gradle.kts <<'GUARD_EOF'
+          HB_EOF
+          cat > helper_app/app/build.gradle.kts <<'HB_EOF'
           plugins { id("com.android.application"); id("org.jetbrains.kotlin.android") }
           android {
-            namespace = "com.guard.overlay"
+            namespace = "com.helper.ball"
             compileSdk = 34
-            defaultConfig { applicationId = "com.guard.overlay"; minSdk = 26; targetSdk = 34; versionCode = 1; versionName = "1.0" }
+            defaultConfig { applicationId = "com.helper.ball"; minSdk = 26; targetSdk = 33; versionCode = 1; versionName = "1.0" }
             kotlinOptions { jvmTarget = "17" }
             compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
           }
-          GUARD_EOF
-          cat > overlay_app/app/src/main/AndroidManifest.xml <<'GUARD_EOF'
+          HB_EOF
+          cat > helper_app/app/src/main/AndroidManifest.xml <<'HB_EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW"/>
-            <application android:label="Battery Guard">
-              <receiver android:name=".GuardReceiver" android:exported="true">
-                <intent-filter>
-                  <action android:name="com.guard.SHOW"/>
-                  <action android:name="com.guard.HIDE"/>
-                </intent-filter>
-              </receiver>
+            <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
+            <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+            <uses-permission android:name="android.permission.QUERY_ALL_PACKAGES"/>
+            <queries>
+              <intent>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+              </intent>
+            </queries>
+            <application android:label="Helper Ball">
+              <service android:name=".HelperService" android:exported="true"/>
             </application>
           </manifest>
-          GUARD_EOF
-          cat > overlay_app/app/src/main/java/com/guard/overlay/GuardReceiver.kt <<'GUARD_EOF'
-          package com.guard.overlay
+          HB_EOF
+          cat > helper_app/app/src/main/java/com/helper/ball/HelperService.kt <<'HB_EOF'
+          package com.helper.ball
 
-          import android.content.BroadcastReceiver
+          import android.animation.Animator
+          import android.animation.AnimatorListenerAdapter
+          import android.animation.ValueAnimator
+          import android.app.ActivityManager
+          import android.app.Notification
+          import android.app.NotificationChannel
+          import android.app.NotificationManager
+          import android.app.Service
           import android.content.Context
           import android.content.Intent
+          import android.content.IntentFilter
+          import android.content.SharedPreferences
           import android.content.res.Configuration
           import android.graphics.Canvas
           import android.graphics.Color
           import android.graphics.Paint
           import android.graphics.PixelFormat
-          import android.graphics.RectF
+          import android.graphics.Typeface
           import android.graphics.drawable.GradientDrawable
+          import android.hardware.camera2.CameraCharacteristics
+          import android.hardware.camera2.CameraManager
+          import android.os.BatteryManager
           import android.os.Build
+          import android.os.Handler
+          import android.os.IBinder
+          import android.os.Looper
+          import android.text.TextUtils
           import android.util.TypedValue
           import android.view.Gravity
+          import android.view.KeyEvent
+          import android.view.MotionEvent
           import android.view.View
           import android.view.WindowManager
           import android.widget.FrameLayout
+          import android.widget.ImageView
           import android.widget.LinearLayout
+          import android.widget.ScrollView
           import android.widget.TextView
+          import android.widget.Toast
+          import java.net.Inet4Address
+          import java.net.NetworkInterface
+          import java.text.SimpleDateFormat
+          import java.util.Collections
+          import java.util.Date
+          import java.util.Locale
+          import kotlin.math.abs
 
-          class BatteryIcon(ctx: Context, private val tint: Int) : View(ctx) {
+          private const val MP = -1
+          private const val WC = -2
+
+          class BallView(ctx: Context) : View(ctx) {
             private val p = Paint(Paint.ANTI_ALIAS_FLAG)
             override fun onDraw(c: Canvas) {
               val w = width.toFloat()
               val h = height.toFloat()
-              val bodyW = w * 0.88f
-              val s = h * 0.09f
-              p.color = tint
-              p.style = Paint.Style.STROKE
-              p.strokeWidth = s
-              c.drawRoundRect(RectF(s / 2, s / 2, bodyW - s / 2, h - s / 2), h * 0.22f, h * 0.22f, p)
+              val r = minOf(w, h) / 2f
               p.style = Paint.Style.FILL
-              c.drawRoundRect(RectF(bodyW + s * 0.5f, h * 0.34f, w, h * 0.66f), s, s, p)
-              val pad = s * 1.9f
-              c.drawRoundRect(RectF(pad, pad, pad + (bodyW - pad * 2) * 0.12f, h - pad), h * 0.08f, h * 0.08f, p)
+              p.color = Color.parseColor("#E61C1C22")
+              c.drawCircle(w / 2f, h / 2f, r - 1f, p)
+              p.style = Paint.Style.STROKE
+              p.strokeWidth = r * 0.06f
+              p.color = Color.parseColor("#55FFFFFF")
+              c.drawCircle(w / 2f, h / 2f, r - 2f, p)
+              p.style = Paint.Style.FILL
+              p.color = Color.WHITE
+              val d = r * 0.14f
+              val g = r * 0.34f
+              for (ix in -1..1 step 2) {
+                for (iy in -1..1 step 2) {
+                  c.drawCircle(w / 2f + ix * g, h / 2f + iy * g, d, p)
+                }
+              }
             }
           }
 
-          class GuardReceiver : BroadcastReceiver() {
+          class HelperService : Service() {
 
-            private fun dp(ctx: Context, v: Int): Int =
-              TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics).toInt()
+            private lateinit var wm: WindowManager
+            private lateinit var prefs: SharedPreferences
+            private val ui = Handler(Looper.getMainLooper())
+            private var ball: View? = null
+            private var panel: View? = null
+            private var holder: LinearLayout? = null
+            private var torchOn = false
 
-            private fun label(ctx: Context, txt: String, sp: Float, color: Int, bold: Boolean): TextView =
-              TextView(ctx).apply {
-                text = txt
-                textSize = sp
-                setTextColor(color)
-                gravity = Gravity.CENTER
-                textAlignment = View.TEXT_ALIGNMENT_CENTER
-                if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+            override fun onBind(intent: Intent?): IBinder? = null
+
+            override fun onCreate() {
+              super.onCreate()
+              wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+              prefs = getSharedPreferences("helper", Context.MODE_PRIVATE)
+            }
+
+            override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+              startFg()
+              if (ball == null) showBall()
+              return START_STICKY
+            }
+
+            override fun onDestroy() {
+              closePanel()
+              ball?.let {
+                try {
+                  wm.removeView(it)
+                } catch (_: Exception) {
+                }
               }
+              ball = null
+              super.onDestroy()
+            }
 
-            private fun buildView(ctx: Context, blur: Boolean): View {
-              val night = (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
-              val cardColor = Color.parseColor(if (night) "#2B2B30" else "#FFFFFF")
-              val titleColor = Color.parseColor(if (night) "#F2F2F2" else "#1C1B1F")
-              val subColor = Color.parseColor(if (night) "#B0B3B8" else "#5F6368")
-              val noteColor = Color.parseColor(if (night) "#8E9196" else "#80868B")
-              val lineColor = Color.parseColor(if (night) "#3C3C42" else "#E6E6E6")
-              val accent = Color.parseColor("#E5484D")
+            // ---------- helpers ----------
 
-              val root = FrameLayout(ctx)
+            private fun dp(v: Int): Int =
+              TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), resources.displayMetrics).toInt()
+
+            private fun isNight(): Boolean =
+              (resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+
+            private fun col(light: String, dark: String): Int = Color.parseColor(if (isNight()) dark else light)
+
+            private fun lpl(w: Int, h: Int, wt: Float = 0f): LinearLayout.LayoutParams = LinearLayout.LayoutParams(w, h, wt)
+
+            private fun toast(msg: String) {
+              ui.post { Toast.makeText(applicationContext, msg, Toast.LENGTH_SHORT).show() }
+            }
+
+            private fun shOut(cmd: String): String {
+              return try {
+                val p = ProcessBuilder("su", "-c", cmd).redirectErrorStream(true).start()
+                val out = p.inputStream.bufferedReader().readText().trim()
+                p.waitFor()
+                out
+              } catch (e: Exception) {
+                ""
+              }
+            }
+
+            private fun sh(cmd: String) {
+              Thread { shOut(cmd) }.start()
+            }
+
+            private fun key(code: Int) {
+              ui.postDelayed({ sh("input keyevent $code") }, 200)
+            }
+
+            private fun text(t: String, sp: Float, color: Int, bold: Boolean, center: Boolean = true): TextView {
+              val tv = TextView(this)
+              tv.text = t
+              tv.textSize = sp
+              tv.setTextColor(color)
+              if (center) {
+                tv.gravity = Gravity.CENTER
+                tv.textAlignment = View.TEXT_ALIGNMENT_CENTER
+              } else {
+                tv.gravity = Gravity.CENTER_VERTICAL or Gravity.START
+                tv.textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+              }
+              if (bold) tv.setTypeface(tv.typeface, Typeface.BOLD)
+              return tv
+            }
+
+            private fun startFg() {
+              val nm = getSystemService(NotificationManager::class.java)
+              nm.createNotificationChannel(NotificationChannel("helper", "Helper Ball", NotificationManager.IMPORTANCE_MIN))
+              val n = Notification.Builder(this, "helper")
+                .setSmallIcon(android.R.drawable.ic_menu_manage)
+                .setContentTitle("Helper Ball")
+                .setOngoing(true)
+                .build()
+              startForeground(1, n)
+            }
+
+            // ---------- floating ball ----------
+
+            private fun showBall() {
+              val size = dp(50)
+              val lp = WindowManager.LayoutParams(
+                size,
+                size,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+                PixelFormat.TRANSLUCENT
+              )
+              lp.gravity = Gravity.TOP or Gravity.START
+              val dm = resources.displayMetrics
+              lp.x = prefs.getInt("bx", dm.widthPixels - size)
+              lp.y = prefs.getInt("by", (dm.heightPixels * 0.4f).toInt())
+              val b = BallView(this)
+              b.alpha = 0.85f
+              var downX = 0f
+              var downY = 0f
+              var startX = 0
+              var startY = 0
+              var moved = false
+              b.setOnTouchListener { v, e ->
+                when (e.action) {
+                  MotionEvent.ACTION_DOWN -> {
+                    downX = e.rawX
+                    downY = e.rawY
+                    startX = lp.x
+                    startY = lp.y
+                    moved = false
+                    v.alpha = 1f
+                    true
+                  }
+                  MotionEvent.ACTION_MOVE -> {
+                    val dx = (e.rawX - downX).toInt()
+                    val dy = (e.rawY - downY).toInt()
+                    if (!moved && (abs(dx) > dp(6) || abs(dy) > dp(6))) moved = true
+                    if (moved) {
+                      lp.x = startX + dx
+                      lp.y = startY + dy
+                      try {
+                        wm.updateViewLayout(v, lp)
+                      } catch (_: Exception) {
+                      }
+                    }
+                    true
+                  }
+                  MotionEvent.ACTION_UP -> {
+                    v.alpha = 0.85f
+                    if (moved) snap(v, lp) else togglePanel()
+                    true
+                  }
+                  else -> false
+                }
+              }
+              wm.addView(b, lp)
+              ball = b
+            }
+
+            private fun snap(v: View, lp: WindowManager.LayoutParams) {
+              val dm = resources.displayMetrics
+              val target = if (lp.x + lp.width / 2 < dm.widthPixels / 2) 0 else dm.widthPixels - lp.width
+              lp.y = lp.y.coerceIn(0, dm.heightPixels - lp.height)
+              val anim = ValueAnimator.ofInt(lp.x, target)
+              anim.duration = 180
+              anim.addUpdateListener { a ->
+                lp.x = a.animatedValue as Int
+                try {
+                  wm.updateViewLayout(v, lp)
+                } catch (_: Exception) {
+                }
+              }
+              anim.addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                  prefs.edit().putInt("bx", lp.x).putInt("by", lp.y).apply()
+                }
+              })
+              anim.start()
+            }
+
+            // ---------- panel ----------
+
+            private fun togglePanel() {
+              if (panel != null) closePanel() else openPanel()
+            }
+
+            private fun closePanel() {
+              panel?.let {
+                try {
+                  wm.removeView(it)
+                } catch (_: Exception) {
+                }
+              }
+              panel = null
+              holder = null
+            }
+
+            private fun openPanel() {
+              if (panel != null) return
+              val blur = Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled
+              val root = FrameLayout(this)
               root.layoutDirection = View.LAYOUT_DIRECTION_RTL
-              root.setBackgroundColor(if (blur) Color.argb(70, 0, 0, 0) else Color.argb(205, 0, 0, 0))
-              root.isClickable = true
-              root.setOnTouchListener { _, _ -> true }
+              root.setBackgroundColor(if (blur) Color.argb(80, 0, 0, 0) else Color.argb(190, 0, 0, 0))
+              root.setOnClickListener { closePanel() }
+              root.isFocusable = true
+              root.isFocusableInTouchMode = true
+              root.setOnKeyListener { _, keyCode, ev ->
+                if (keyCode == KeyEvent.KEYCODE_BACK && ev.action == KeyEvent.ACTION_UP) {
+                  closePanel()
+                  true
+                } else {
+                  false
+                }
+              }
 
-              val card = LinearLayout(ctx)
+              val card = LinearLayout(this)
               card.orientation = LinearLayout.VERTICAL
-              card.gravity = Gravity.CENTER_HORIZONTAL
-              card.setPadding(dp(ctx, 24), dp(ctx, 28), dp(ctx, 24), dp(ctx, 20))
+              card.setPadding(dp(14), dp(14), dp(14), dp(12))
               card.background = GradientDrawable().apply {
-                setColor(cardColor)
-                cornerRadius = dp(ctx, 28).toFloat()
+                setColor(col("#FFFFFF", "#26262B"))
+                cornerRadius = dp(26).toFloat()
               }
-              card.elevation = dp(ctx, 14).toFloat()
-
-              val icon = BatteryIcon(ctx, accent)
-              card.addView(icon, LinearLayout.LayoutParams(dp(ctx, 76), dp(ctx, 38)))
-
-              val title = label(ctx, "قم بشحن جهازك", 22f, titleColor, true)
-              val tlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-              tlp.topMargin = dp(ctx, 18)
-              card.addView(title, tlp)
-
-              val sub = label(ctx, "البطارية منخفضة جداً (1%)", 15f, subColor, false)
-              val slp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-              slp.topMargin = dp(ctx, 6)
-              card.addView(sub, slp)
-
-              val line = View(ctx)
-              line.setBackgroundColor(lineColor)
-              val llp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(ctx, 1))
-              llp.topMargin = dp(ctx, 18)
-              card.addView(line, llp)
-
-              val note = label(ctx, "ملاحظة: وصّل الشاحن عشان التليفون ميفصلش وصلاحيات الروت المؤقت ما تروحش.", 12f, noteColor, false)
-              val nlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
-              nlp.topMargin = dp(ctx, 14)
-              card.addView(note, nlp)
-
-              val clp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+              card.elevation = dp(14).toFloat()
+              card.isClickable = true
+              holder = card
+              val clp = FrameLayout.LayoutParams(MP, WC)
               clp.gravity = Gravity.CENTER
-              clp.leftMargin = dp(ctx, 32)
-              clp.rightMargin = dp(ctx, 32)
+              clp.leftMargin = dp(14)
+              clp.rightMargin = dp(14)
               root.addView(card, clp)
+              renderMain()
 
+              var flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS
+              if (blur) {
+                @Suppress("DEPRECATION")
+                flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
+              }
+              val p = WindowManager.LayoutParams(
+                MP,
+                MP,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                flags,
+                PixelFormat.TRANSLUCENT
+              )
+              if (Build.VERSION.SDK_INT >= 28) {
+                p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+              }
+              if (blur) {
+                p.blurBehindRadius = 90
+              }
               root.alpha = 0f
-              card.scaleX = 0.92f
-              card.scaleY = 0.92f
-              root.post {
-                root.animate().alpha(1f).setDuration(220).start()
-                card.animate().scaleX(1f).scaleY(1f).setDuration(220).start()
+              card.scaleX = 0.94f
+              card.scaleY = 0.94f
+              try {
+                wm.addView(root, p)
+              } catch (e: Exception) {
+                holder = null
+                return
               }
-              return root
+              panel = root
+              root.requestFocus()
+              root.animate().alpha(1f).setDuration(180).start()
+              card.animate().scaleX(1f).scaleY(1f).setDuration(180).start()
             }
 
-            override fun onReceive(c: Context, i: Intent) {
-              val ctx = c.applicationContext
-              val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
-              when (i.action) {
-                "com.guard.SHOW" -> if (view == null) {
-                  val blur = Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled
-                  val v = buildView(ctx, blur)
-                  var flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
-                  if (blur) {
-                    @Suppress("DEPRECATION")
-                    flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
-                  }
-                  val p = WindowManager.LayoutParams(
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.MATCH_PARENT,
-                    WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    flags,
-                    PixelFormat.TRANSLUCENT
-                  )
-                  if (Build.VERSION.SDK_INT >= 28) {
-                    p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
-                  }
-                  if (blur) {
-                    p.blurBehindRadius = 90
-                  }
-                  try {
-                    wm.addView(v, p)
-                    view = v
-                  } catch (_: Exception) {
-                  }
+            private fun header(title: String, rightLabel: String, onRight: () -> Unit): LinearLayout {
+              val head = LinearLayout(this)
+              head.orientation = LinearLayout.HORIZONTAL
+              head.gravity = Gravity.CENTER_VERTICAL
+              head.addView(text(title, 20f, col("#1C1B1F", "#F2F2F2"), true, false), lpl(0, WC, 1f))
+              val r = text(rightLabel, 18f, col("#5F6368", "#B0B3B8"), true)
+              r.setPadding(dp(12), dp(4), dp(12), dp(4))
+              r.setOnClickListener { onRight() }
+              head.addView(r, lpl(WC, WC))
+              return head
+            }
+
+            private fun scrollHeight(): Int = (resources.displayMetrics.heightPixels * 0.62f).toInt()
+
+            private fun renderMain() {
+              val h = holder ?: return
+              h.removeAllViews()
+              h.addView(header("المساعد", "✕") { closePanel() }, lpl(MP, WC))
+
+              val info = text("...", 12f, col("#5F6368", "#B0B3B8"), false, false)
+              val ilp = lpl(MP, WC)
+              ilp.topMargin = dp(2)
+              ilp.bottomMargin = dp(6)
+              h.addView(info, ilp)
+              Thread {
+                val t = infoText()
+                ui.post { info.text = t }
+              }.start()
+
+              val scroll = ScrollView(this)
+              scroll.isVerticalScrollBarEnabled = false
+              val content = LinearLayout(this)
+              content.orientation = LinearLayout.VERTICAL
+              scroll.addView(content)
+              h.addView(scroll, lpl(MP, scrollHeight()))
+
+              addSection(content, "التنقل", listOf(
+                tile("⬅️", "رجوع", true) { key(4) },
+                tile("🏠", "الرئيسية", true) { key(3) },
+                tile("🗂", "الأخيرة", true) { key(187) },
+                tile("🔒", "قفل الشاشة", true) { key(223) },
+                tile("🔔", "الإشعارات", true) { sh("cmd statusbar expand-notifications") },
+                tile("⚙️", "إعدادات سريعة", true) { sh("cmd statusbar expand-settings") },
+                tile("📸", "لقطة شاشة", true) { screenshot() },
+                tile("🎥", "تسجيل الشاشة", true) { record() }
+              ))
+
+              addSection(content, "تحكم سريع", listOf(
+                tile("📶", "واي فاي") {
+                  toggle("واي فاي", "settings get global wifi_on", { it != "0" && it != "null" && it.isNotEmpty() }, "svc wifi enable", "svc wifi disable")
+                },
+                tile("🔵", "بلوتوث") {
+                  toggle("بلوتوث", "settings get global bluetooth_on", { it == "1" }, "svc bluetooth enable", "svc bluetooth disable")
+                },
+                tile("✈️", "وضع الطيران") {
+                  toggle("الطيران", "settings get global airplane_mode_on", { it == "1" }, "cmd connectivity airplane-mode enable", "cmd connectivity airplane-mode disable")
+                },
+                tile("📡", "بيانات الجوال") {
+                  toggle("البيانات", "settings get global mobile_data", { it == "1" }, "svc data enable", "svc data disable")
+                },
+                tile("🔄", "تدوير الشاشة") {
+                  toggle("التدوير التلقائي", "settings get system accelerometer_rotation", { it == "1" }, "settings put system accelerometer_rotation 1", "settings put system accelerometer_rotation 0")
+                },
+                tile("🌙", "الوضع الداكن") {
+                  toggle("الوضع الداكن", "cmd uimode night", { it.contains("yes") }, "cmd uimode night yes", "cmd uimode night no")
+                },
+                tile("🔦", "كشاف") { torch() },
+                tile("☀️", "شاشة دايمة (شحن)") {
+                  toggle("الشاشة الدايمة", "settings get global stay_on_while_plugged_in", { it != "0" && it != "null" && it.isNotEmpty() }, "svc power stayon true", "svc power stayon false")
+                },
+                tile("👆", "إظهار اللمس") {
+                  toggle("إظهار اللمس", "settings get system show_touches", { it == "1" }, "settings put system show_touches 1", "settings put system show_touches 0")
                 }
-                "com.guard.HIDE" -> view?.let {
-                  try {
-                    wm.removeView(it)
-                  } catch (_: Exception) {
-                  }
-                  view = null
+              ))
+
+              addSection(content, "الصوت والسطوع", listOf(
+                tile("🔊", "رفع الصوت") { key(24) },
+                tile("🔉", "خفض الصوت") { key(25) },
+                tile("🔇", "كتم") { key(164) },
+                tile("🔅", "سطوع أقل") { brightness(-30) },
+                tile("🔆", "سطوع أعلى") { brightness(30) },
+                tile("🅰️", "سطوع تلقائي") {
+                  toggle("السطوع التلقائي", "settings get system screen_brightness_mode", { it == "1" }, "settings put system screen_brightness_mode 1", "settings put system screen_brightness_mode 0")
                 }
+              ))
+
+              addSection(content, "الأداء", listOf(
+                tile("🧹", "تنظيف الرام") { cleanRam() },
+                tile("🗑", "مسح الكاش") {
+                  toast("جاري مسح الكاش...")
+                  Thread {
+                    shOut("pm trim-caches 999G")
+                    toast("تم مسح كاش التطبيقات")
+                  }.start()
+                },
+                tile("❌", "إغلاق التطبيق الحالي", true) { killCurrent() }
+              ))
+
+              val appTiles = ArrayList<View>()
+              for (pkg in pins()) {
+                val t = appTile(pkg)
+                if (t != null) appTiles.add(t)
+              }
+              appTiles.add(tile("➕", "إضافة تطبيق") { renderPicker() })
+              addSection(content, "اختصاراتي (اضغط مطوّلاً للحذف)", appTiles)
+
+              addSection(content, "الطاقة ⚠️ الروت المؤقت هيروح بعد الريستارت", listOf(
+                tile("⚡", "ريستارت سريع", confirm = true) { sh("setprop ctl.restart zygote") },
+                tile("🔁", "ريستارت", confirm = true) { sh("reboot") },
+                tile("🛠", "ريكفري", confirm = true) { sh("reboot recovery") },
+                tile("📲", "بوتلودر", confirm = true) { sh("reboot bootloader") },
+                tile("⏻", "إيقاف", confirm = true) { sh("reboot -p") }
+              ))
+            }
+
+            private fun addSection(parent: LinearLayout, title: String, tiles: List<View>) {
+              val t = text(title, 13f, col("#5F6368", "#9AA0A6"), true, false)
+              val tlp = lpl(MP, WC)
+              tlp.topMargin = dp(12)
+              tlp.bottomMargin = dp(2)
+              parent.addView(t, tlp)
+              for (chunk in tiles.chunked(4)) {
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                for (tv in chunk) {
+                  val lp = lpl(0, dp(78), 1f)
+                  lp.setMargins(dp(3), dp(3), dp(3), dp(3))
+                  row.addView(tv, lp)
+                }
+                for (k in 0 until (4 - chunk.size)) {
+                  val lp = lpl(0, dp(78), 1f)
+                  lp.setMargins(dp(3), dp(3), dp(3), dp(3))
+                  row.addView(View(this), lp)
+                }
+                parent.addView(row, lpl(MP, WC))
               }
             }
 
-            companion object {
-              var view: View? = null
+            private fun tile(icon: String, label: String, close: Boolean = false, confirm: Boolean = false, action: () -> Unit): View {
+              val iconV = TextView(this)
+              iconV.text = icon
+              iconV.textSize = 24f
+              iconV.gravity = Gravity.CENTER
+              return tileOf(iconV, label, close, confirm, null, action)
+            }
+
+            private fun tileOf(iconV: View, label: String, close: Boolean, confirm: Boolean, onLong: (() -> Unit)?, action: () -> Unit): View {
+              val box = LinearLayout(this)
+              box.orientation = LinearLayout.VERTICAL
+              box.gravity = Gravity.CENTER
+              box.setPadding(dp(4), dp(8), dp(4), dp(6))
+              val normal = col("#F1F3F4", "#35353B")
+              val labColor = col("#1C1B1F", "#E8E8EA")
+              fun bg(c: Int) {
+                box.background = GradientDrawable().apply {
+                  setColor(c)
+                  cornerRadius = dp(16).toFloat()
+                }
+              }
+              bg(normal)
+              box.addView(iconV, lpl(dp(32), dp(32)))
+              val lab = text(label, 11f, labColor, false)
+              lab.maxLines = 2
+              lab.ellipsize = TextUtils.TruncateAt.END
+              val llp = lpl(MP, WC)
+              llp.topMargin = dp(4)
+              box.addView(lab, llp)
+              var armed = false
+              box.setOnClickListener {
+                if (confirm && !armed) {
+                  armed = true
+                  bg(Color.parseColor("#E5484D"))
+                  lab.text = "اضغط تاني للتأكيد"
+                  lab.setTextColor(Color.WHITE)
+                  ui.postDelayed({
+                    armed = false
+                    bg(normal)
+                    lab.text = label
+                    lab.setTextColor(labColor)
+                  }, 3000)
+                } else {
+                  if (close) closePanel()
+                  action()
+                }
+              }
+              if (onLong != null) {
+                box.setOnLongClickListener {
+                  onLong()
+                  true
+                }
+              }
+              return box
+            }
+
+            // ---------- app shortcuts ----------
+
+            private fun pins(): MutableList<String> =
+              (prefs.getString("pins", "") ?: "").split(",").filter { it.isNotEmpty() }.toMutableList()
+
+            private fun savePins(l: List<String>) {
+              prefs.edit().putString("pins", l.joinToString(",")).apply()
+            }
+
+            private fun appTile(pkg: String): View? {
+              val pm = packageManager
+              return try {
+                val label = pm.getApplicationLabel(pm.getApplicationInfo(pkg, 0)).toString()
+                val iv = ImageView(this)
+                iv.setImageDrawable(pm.getApplicationIcon(pkg))
+                tileOf(iv, label, true, false, {
+                  val cur = pins()
+                  cur.remove(pkg)
+                  savePins(cur)
+                  toast("تم حذف الاختصار")
+                  renderMain()
+                }) { launch(pkg) }
+              } catch (e: Exception) {
+                null
+              }
+            }
+
+            private fun launch(pkg: String) {
+              val i = packageManager.getLaunchIntentForPackage(pkg)
+              if (i != null) {
+                i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                try {
+                  startActivity(i)
+                } catch (e: Exception) {
+                  sh("monkey -p $pkg -c android.intent.category.LAUNCHER 1")
+                }
+              } else {
+                sh("monkey -p $pkg -c android.intent.category.LAUNCHER 1")
+              }
+            }
+
+            private fun renderPicker() {
+              val h = holder ?: return
+              h.removeAllViews()
+              h.addView(header("اختر الاختصارات", "تم") { renderMain() }, lpl(MP, WC))
+              val pm = packageManager
+              val q = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+              val apps = pm.queryIntentActivities(q, 0)
+                .distinctBy { it.activityInfo.packageName }
+                .sortedBy { it.loadLabel(pm).toString().lowercase() }
+              val sel = pins()
+              val scroll = ScrollView(this)
+              val list = LinearLayout(this)
+              list.orientation = LinearLayout.VERTICAL
+              scroll.addView(list)
+              h.addView(scroll, lpl(MP, scrollHeight()))
+              for (ri in apps) {
+                val pkg = ri.activityInfo.packageName
+                if (pkg == packageName) continue
+                val row = LinearLayout(this)
+                row.orientation = LinearLayout.HORIZONTAL
+                row.gravity = Gravity.CENTER_VERTICAL
+                row.setPadding(dp(8), dp(8), dp(8), dp(8))
+                val icon = ImageView(this)
+                icon.setImageDrawable(ri.loadIcon(pm))
+                row.addView(icon, lpl(dp(36), dp(36)))
+                val name = text(ri.loadLabel(pm).toString(), 15f, col("#1C1B1F", "#F2F2F2"), false, false)
+                name.setPadding(dp(12), 0, dp(12), 0)
+                row.addView(name, lpl(0, WC, 1f))
+                val chk = text(if (sel.contains(pkg)) "✓" else "", 18f, Color.parseColor("#4C8DF6"), true)
+                row.addView(chk, lpl(dp(28), WC))
+                row.setOnClickListener {
+                  val cur = pins()
+                  if (cur.contains(pkg)) cur.remove(pkg) else cur.add(pkg)
+                  savePins(cur)
+                  chk.text = if (cur.contains(pkg)) "✓" else ""
+                }
+                list.addView(row, lpl(MP, WC))
+              }
+            }
+
+            // ---------- actions ----------
+
+            private fun toggle(name: String, getCmd: String, isOn: (String) -> Boolean, onCmd: String, offCmd: String) {
+              Thread {
+                val cur = isOn(shOut(getCmd))
+                shOut(if (cur) offCmd else onCmd)
+                val st = if (cur) "إيقاف" else "تشغيل"
+                toast("$name: $st")
+              }.start()
+            }
+
+            private fun brightness(delta: Int) {
+              Thread {
+                shOut("settings put system screen_brightness_mode 0")
+                val cur = shOut("settings get system screen_brightness").toIntOrNull() ?: 128
+                val n = (cur + delta).coerceIn(5, 255)
+                shOut("settings put system screen_brightness $n")
+                toast("السطوع: ${n * 100 / 255}%")
+              }.start()
+            }
+
+            private fun stamp(): String = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
+
+            private fun screenshot() {
+              val path = "/sdcard/Pictures/Screenshots/HB_${stamp()}.png"
+              ui.postDelayed({
+                Thread {
+                  shOut("mkdir -p /sdcard/Pictures/Screenshots; screencap -p $path; am broadcast -a android.intent.action.MEDIA_SCANNER_SCAN_FILE -d file://$path")
+                  toast("تم حفظ اللقطة في Pictures/Screenshots")
+                }.start()
+              }, 400)
+            }
+
+            private fun record() {
+              Thread {
+                val pid = shOut("pidof screenrecord")
+                if (pid.isNotEmpty()) {
+                  shOut("pkill -2 screenrecord")
+                  toast("تم إيقاف التسجيل وحفظه في Movies")
+                } else {
+                  val path = "/sdcard/Movies/HB_${stamp()}.mp4"
+                  toast("بدأ التسجيل (اضغط الأيقونة تاني للإيقاف)")
+                  shOut("mkdir -p /sdcard/Movies; screenrecord --time-limit 180 $path")
+                }
+              }.start()
+            }
+
+            private fun availMb(): Long {
+              val mi = ActivityManager.MemoryInfo()
+              (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(mi)
+              return mi.availMem / 1048576
+            }
+
+            private fun cleanRam() {
+              toast("جاري التنظيف...")
+              Thread {
+                val before = availMb()
+                shOut("am kill-all; sync; echo 3 > /proc/sys/vm/drop_caches")
+                Thread.sleep(800)
+                val after = availMb()
+                val diff = after - before
+                val sign = if (diff >= 0) "+" else ""
+                toast("تم التنظيف: $after MB متاحة ($sign$diff)")
+              }.start()
+            }
+
+            private fun killCurrent() {
+              Thread {
+                val out = shOut("dumpsys activity activities | grep -m1 -E 'topResumedActivity|mResumedActivity'")
+                val pkg = Regex("([A-Za-z0-9_.]+)/").find(out)?.groupValues?.get(1)
+                if (pkg == null || pkg == packageName || pkg == "com.android.systemui") {
+                  toast("مش قادر أحدد التطبيق الحالي")
+                } else {
+                  shOut("am force-stop $pkg")
+                  toast("تم إغلاق $pkg")
+                }
+              }.start()
+            }
+
+            private fun torch() {
+              try {
+                val cm = getSystemService(Context.CAMERA_SERVICE) as CameraManager
+                val id = cm.cameraIdList.firstOrNull {
+                  cm.getCameraCharacteristics(it).get(CameraCharacteristics.FLASH_INFO_AVAILABLE) == true
+                }
+                if (id == null) {
+                  toast("مفيش فلاش في الجهاز")
+                  return
+                }
+                torchOn = !torchOn
+                cm.setTorchMode(id, torchOn)
+                val st = if (torchOn) "تشغيل" else "إيقاف"
+                toast("الكشاف: $st")
+              } catch (e: Exception) {
+                torchOn = false
+                toast("تعذر تشغيل الكشاف")
+              }
+            }
+
+            private fun ipAddr(): String {
+              try {
+                for (ni in Collections.list(NetworkInterface.getNetworkInterfaces())) {
+                  if (!ni.isUp || ni.isLoopback) continue
+                  for (a in Collections.list(ni.inetAddresses)) {
+                    if (a is Inet4Address && !a.isLoopbackAddress) return a.hostAddress ?: "-"
+                  }
+                }
+              } catch (e: Exception) {
+              }
+              return "-"
+            }
+
+            private fun infoText(): String {
+              val bi = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+              val lvl = bi?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+              val tmp = (bi?.getIntExtra(BatteryManager.EXTRA_TEMPERATURE, 0) ?: 0) / 10.0
+              val mi = ActivityManager.MemoryInfo()
+              (getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager).getMemoryInfo(mi)
+              val free = mi.availMem / 1048576
+              val tot = mi.totalMem / 1048576
+              val t = String.format(Locale.US, "%.1f", tmp)
+              return "🔋 $lvl%   🌡 $t°   🧠 $free/$tot MB   📶 ${ipAddr()}"
             }
           }
-          GUARD_EOF
+          HB_EOF
       - name: Build APK
         run: |
           export JAVA_HOME="$JAVA_HOME_17_X64"
@@ -279,7 +852,7 @@ jobs:
           done
           if [ "$ok" != "1" ]; then echo "could not download gradle from any mirror"; exit 1; fi
           unzip -q gradle.zip -d "$HOME"
-          cd overlay_app
+          cd helper_app
           for i in 1 2 3; do
             "$HOME/gradle-8.7/bin/gradle" assembleDebug --no-daemon && break
             echo "build failed, retry $i"
@@ -288,10 +861,10 @@ jobs:
           ls app/build/outputs/apk/debug/app-debug.apk
       - name: Assemble module
         run: |
-          cp overlay_app/app/build/outputs/apk/debug/app-debug.apk battery_guard/overlay.apk
-          chmod +x battery_guard/*.sh
-          cd battery_guard && zip -r ../battery_guard_module.zip .
+          cp helper_app/app/build/outputs/apk/debug/app-debug.apk helper_module/helper.apk
+          chmod +x helper_module/*.sh
+          cd helper_module && zip -r ../helper_ball_module.zip .
       - uses: actions/upload-artifact@v4
         with:
-          name: battery_guard_module
-          path: battery_guard_module.zip
+          name: helper_ball_module
+          path: helper_ball_module.zip
