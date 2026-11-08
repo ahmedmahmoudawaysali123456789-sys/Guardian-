@@ -5,14 +5,6 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: "17"
-      - uses: gradle/actions/setup-gradle@v4
-        with:
-          gradle-version: "8.7"
-          cache-disabled: true
       - name: Write project files
         run: |
           mkdir -p battery_guard overlay_app/app/src/main/java/com/guard/overlay
@@ -136,8 +128,21 @@ jobs:
           }
           GUARD_EOF
       - name: Build APK
-        working-directory: overlay_app
-        run: gradle assembleDebug --no-daemon
+        run: |
+          export JAVA_HOME="$JAVA_HOME_17_X64"
+          export PATH="$JAVA_HOME/bin:$PATH"
+          java -version
+          for i in 1 2 3 4 5 6; do
+            curl -fL -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip && break
+            echo "download failed, retry $i"; sleep 15
+          done
+          unzip -q gradle.zip -d "$HOME"
+          cd overlay_app
+          for i in 1 2 3; do
+            "$HOME/gradle-8.7/bin/gradle" assembleDebug --no-daemon && break
+            echo "build failed, retry $i"; sleep 20
+          done
+          ls app/build/outputs/apk/debug/app-debug.apk
       - name: Assemble module
         run: |
           cp overlay_app/app/build/outputs/apk/debug/app-debug.apk battery_guard/overlay.apk
