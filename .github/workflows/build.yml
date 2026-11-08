@@ -257,15 +257,33 @@ jobs:
           export JAVA_HOME="$JAVA_HOME_17_X64"
           export PATH="$JAVA_HOME/bin:$PATH"
           java -version
-          for i in 1 2 3 4 5 6; do
-            curl -fL -o gradle.zip https://services.gradle.org/distributions/gradle-8.7-bin.zip && break
-            echo "download failed, retry $i"; sleep 15
+          URLS="
+          https://github.com/gradle/gradle-distributions/releases/download/v8.7.0/gradle-8.7-bin.zip
+          https://services.gradle.org/distributions/gradle-8.7-bin.zip
+          https://downloads.gradle.org/distributions/gradle-8.7-bin.zip
+          https://mirrors.cloud.tencent.com/gradle/gradle-8.7-bin.zip
+          https://mirrors.aliyun.com/gradle/distributions/v8.7.0/gradle-8.7-bin.zip
+          "
+          ok=0
+          for round in 1 2 3 4; do
+            for u in $URLS; do
+              echo "trying $u"
+              rm -f gradle.zip
+              if curl -fsSL --connect-timeout 20 --max-time 300 -o gradle.zip "$u" && unzip -tq gradle.zip >/dev/null 2>&1; then
+                ok=1
+                break 2
+              fi
+              echo "failed: $u"
+            done
+            sleep 20
           done
+          if [ "$ok" != "1" ]; then echo "could not download gradle from any mirror"; exit 1; fi
           unzip -q gradle.zip -d "$HOME"
           cd overlay_app
           for i in 1 2 3; do
             "$HOME/gradle-8.7/bin/gradle" assembleDebug --no-daemon && break
-            echo "build failed, retry $i"; sleep 20
+            echo "build failed, retry $i"
+            sleep 20
           done
           ls app/build/outputs/apk/debug/app-debug.apk
       - name: Assemble module
