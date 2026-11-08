@@ -87,44 +87,169 @@ jobs:
           cat > overlay_app/app/src/main/java/com/guard/overlay/GuardReceiver.kt <<'GUARD_EOF'
           package com.guard.overlay
 
-          import android.content.*
-          import android.graphics.*
-          import android.view.*
+          import android.content.BroadcastReceiver
+          import android.content.Context
+          import android.content.Intent
+          import android.content.res.Configuration
+          import android.graphics.Canvas
+          import android.graphics.Color
+          import android.graphics.Paint
+          import android.graphics.PixelFormat
+          import android.graphics.RectF
+          import android.graphics.drawable.GradientDrawable
+          import android.os.Build
+          import android.util.TypedValue
+          import android.view.Gravity
+          import android.view.View
+          import android.view.WindowManager
+          import android.widget.FrameLayout
+          import android.widget.LinearLayout
           import android.widget.TextView
 
+          class BatteryIcon(ctx: Context, private val tint: Int) : View(ctx) {
+            private val p = Paint(Paint.ANTI_ALIAS_FLAG)
+            override fun onDraw(c: Canvas) {
+              val w = width.toFloat()
+              val h = height.toFloat()
+              val bodyW = w * 0.88f
+              val s = h * 0.09f
+              p.color = tint
+              p.style = Paint.Style.STROKE
+              p.strokeWidth = s
+              c.drawRoundRect(RectF(s / 2, s / 2, bodyW - s / 2, h - s / 2), h * 0.22f, h * 0.22f, p)
+              p.style = Paint.Style.FILL
+              c.drawRoundRect(RectF(bodyW + s * 0.5f, h * 0.34f, w, h * 0.66f), s, s, p)
+              val pad = s * 1.9f
+              c.drawRoundRect(RectF(pad, pad, pad + (bodyW - pad * 2) * 0.12f, h - pad), h * 0.08f, h * 0.08f, p)
+            }
+          }
+
           class GuardReceiver : BroadcastReceiver() {
+
+            private fun dp(ctx: Context, v: Int): Int =
+              TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, v.toFloat(), ctx.resources.displayMetrics).toInt()
+
+            private fun label(ctx: Context, txt: String, sp: Float, color: Int, bold: Boolean): TextView =
+              TextView(ctx).apply {
+                text = txt
+                textSize = sp
+                setTextColor(color)
+                gravity = Gravity.CENTER
+                textAlignment = View.TEXT_ALIGNMENT_CENTER
+                if (bold) setTypeface(typeface, android.graphics.Typeface.BOLD)
+              }
+
+            private fun buildView(ctx: Context, blur: Boolean): View {
+              val night = (ctx.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES
+              val cardColor = Color.parseColor(if (night) "#2B2B30" else "#FFFFFF")
+              val titleColor = Color.parseColor(if (night) "#F2F2F2" else "#1C1B1F")
+              val subColor = Color.parseColor(if (night) "#B0B3B8" else "#5F6368")
+              val noteColor = Color.parseColor(if (night) "#8E9196" else "#80868B")
+              val lineColor = Color.parseColor(if (night) "#3C3C42" else "#E6E6E6")
+              val accent = Color.parseColor("#E5484D")
+
+              val root = FrameLayout(ctx)
+              root.layoutDirection = View.LAYOUT_DIRECTION_RTL
+              root.setBackgroundColor(if (blur) Color.argb(70, 0, 0, 0) else Color.argb(205, 0, 0, 0))
+              root.isClickable = true
+              root.setOnTouchListener { _, _ -> true }
+
+              val card = LinearLayout(ctx)
+              card.orientation = LinearLayout.VERTICAL
+              card.gravity = Gravity.CENTER_HORIZONTAL
+              card.setPadding(dp(ctx, 24), dp(ctx, 28), dp(ctx, 24), dp(ctx, 20))
+              card.background = GradientDrawable().apply {
+                setColor(cardColor)
+                cornerRadius = dp(ctx, 28).toFloat()
+              }
+              card.elevation = dp(ctx, 14).toFloat()
+
+              val icon = BatteryIcon(ctx, accent)
+              card.addView(icon, LinearLayout.LayoutParams(dp(ctx, 76), dp(ctx, 38)))
+
+              val title = label(ctx, "قم بشحن جهازك", 22f, titleColor, true)
+              val tlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+              tlp.topMargin = dp(ctx, 18)
+              card.addView(title, tlp)
+
+              val sub = label(ctx, "البطارية منخفضة جداً (1%)", 15f, subColor, false)
+              val slp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+              slp.topMargin = dp(ctx, 6)
+              card.addView(sub, slp)
+
+              val line = View(ctx)
+              line.setBackgroundColor(lineColor)
+              val llp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, dp(ctx, 1))
+              llp.topMargin = dp(ctx, 18)
+              card.addView(line, llp)
+
+              val note = label(ctx, "ملاحظة: وصّل الشاحن عشان التليفون ميفصلش وصلاحيات الروت المؤقت ما تروحش.", 12f, noteColor, false)
+              val nlp = LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT)
+              nlp.topMargin = dp(ctx, 14)
+              card.addView(note, nlp)
+
+              val clp = FrameLayout.LayoutParams(FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT)
+              clp.gravity = Gravity.CENTER
+              clp.leftMargin = dp(ctx, 32)
+              clp.rightMargin = dp(ctx, 32)
+              root.addView(card, clp)
+
+              root.alpha = 0f
+              card.scaleX = 0.92f
+              card.scaleY = 0.92f
+              root.post {
+                root.animate().alpha(1f).setDuration(220).start()
+                card.animate().scaleX(1f).scaleY(1f).setDuration(220).start()
+              }
+              return root
+            }
+
             override fun onReceive(c: Context, i: Intent) {
               val ctx = c.applicationContext
               val wm = ctx.getSystemService(Context.WINDOW_SERVICE) as WindowManager
               when (i.action) {
                 "com.guard.SHOW" -> if (view == null) {
-                  val tv = TextView(ctx).apply {
-                    text = "⚠️ البطارية 1%\nاشحن الجهاز"
-                    textSize = 28f
-                    setTextColor(Color.WHITE)
-                    gravity = Gravity.CENTER
-                    setBackgroundColor(Color.parseColor("#F2000000"))
-                    setOnTouchListener { _, _ -> true }
+                  val blur = Build.VERSION.SDK_INT >= 31 && wm.isCrossWindowBlurEnabled
+                  val v = buildView(ctx, blur)
+                  var flags = WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                    WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON
+                  if (blur) {
+                    @Suppress("DEPRECATION")
+                    flags = flags or WindowManager.LayoutParams.FLAG_BLUR_BEHIND
                   }
                   val p = WindowManager.LayoutParams(
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.MATCH_PARENT,
                     WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
-                    WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                      WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS or
-                      WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON or
-                      WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED,
+                    flags,
                     PixelFormat.TRANSLUCENT
                   )
-                  try { wm.addView(tv, p); view = tv } catch (_: Exception) {}
+                  if (Build.VERSION.SDK_INT >= 28) {
+                    p.layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_SHORT_EDGES
+                  }
+                  if (blur) {
+                    p.blurBehindRadius = 90
+                  }
+                  try {
+                    wm.addView(v, p)
+                    view = v
+                  } catch (_: Exception) {
+                  }
                 }
                 "com.guard.HIDE" -> view?.let {
-                  try { wm.removeView(it) } catch (_: Exception) {}
+                  try {
+                    wm.removeView(it)
+                  } catch (_: Exception) {
+                  }
                   view = null
                 }
               }
             }
-            companion object { var view: View? = null }
+
+            companion object {
+              var view: View? = null
+            }
           }
           GUARD_EOF
       - name: Build APK
